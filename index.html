@@ -12,7 +12,13 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
   <style>
-    /* Tipografía idéntica al software original (Courier New de Windows clásico) */
+    @font-face { font-family: 'UnifontMedium'; src: url('./UnifontMedium.ttf') format('truetype'); font-display: swap; }
+
+    /* Fuente suministrada para los dos cuadros de texto */
+    #boxOriginalText, #boxWrittenText {
+      font-family: 'UnifontMedium', monospace;
+      font-weight: normal;
+    }
     .font-terminal {
       font-family: 'Courier New', Courier, monospace;
       font-weight: bold;
@@ -348,7 +354,8 @@
       backspace: "NO",
       fontSize: 13,
       isPanelOpen: true,
-      lastGeneratedIndices: []
+      lastGeneratedIndices: [],
+      generatedErrorCount: 0
     };
 
     // Alfabeto común para reemplazos en caso de errores simulados
@@ -415,71 +422,49 @@
       document.getElementById('charCountLabel').innerText = `${len} caracteres`;
     }
 
-    // Generar texto escrito automáticamente respetando el porcentaje de error
+    // Genera sustituciones individuales y secuencias contiguas de 2 a 5 letras.
+    // Conserva la longitud del texto para que el resaltado coincida con el original.
     function generateAutoWrittenText() {
       const text = state.originalText;
-      if (!text || text.length === 0) {
-        state.writtenText = "";
-        return;
-      }
-
-      const totalChars = text.length;
-      // Calcular número de errores a inyectar (al menos 1 si el texto tiene longitud y el % es > 0)
-      let errorsCount = Math.round((totalChars * state.errorPercent) / 100);
-      if (state.errorPercent > 0 && errorsCount === 0 && totalChars >= 5) {
-        errorsCount = 1;
-      }
-
-      // Escoger índices aleatorios para cometer errores
-      const eligibleIndices = [];
-      for (let i = 0; i < totalChars; i++) {
-        // Preferir letras en vez de solo espacios para que sean visibles
-        if (text[i] !== '\n' && text[i] !== ' ') {
-          eligibleIndices.push(i);
-        }
-      }
-
-      // Mezclar aleatoriamente
-      for (let i = eligibleIndices.length - 1; i > 0; i--) {
+      const letters = [...text];
+      const eligible = letters.map((c, i) => /[a-záéíóúüñ]/i.test(c) ? i : -1).filter(i => i >= 0);
+      const target = Math.min(eligible.length, Math.round(letters.length * state.errorPercent / 100));
+      const selected = new Set();
+      const shuffled = [...eligible];
+      for (let i = shuffled.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
-        [eligibleIndices[i], eligibleIndices[j]] = [eligibleIndices[j], eligibleIndices[i]];
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
       }
-
-      const targetIndices = new Set(eligibleIndices.slice(0, errorsCount));
-      let result = "";
-
-      for (let i = 0; i < totalChars; i++) {
-        const char = text[i];
-        if (targetIndices.has(i)) {
-          // Generar un caracter erróneo
-          result += getTypoForChar(char);
-        } else {
-          result += char;
+      // Aprox. 40% de los grupos son secuencias; el resto, letras aisladas.
+      for (const start of shuffled) {
+        if (selected.size >= target) break;
+        if (selected.has(start)) continue;
+        const remaining = target - selected.size;
+        const desired = Math.random() < 0.4 ? 2 + Math.floor(Math.random() * 4) : 1;
+        const length = Math.min(desired, remaining);
+        const group = [];
+        for (let k = 0; k < length; k++) {
+          const i = start + k;
+          if (i >= letters.length || selected.has(i) || !/[a-záéíóúüñ]/i.test(letters[i])) break;
+          group.push(i);
         }
+        for (const i of group) selected.add(i);
       }
-
-      state.writtenText = result;
-      document.getElementById('inputManualWrittenText').value = result;
-
+      const result = letters.map((c, i) => selected.has(i) ? getTypoForChar(c) : c);
+      state.writtenText = result.join('');
+      state.lastGeneratedIndices = [...selected].sort((a,b) => a-b);
+      state.generatedErrorCount = selected.size;
+      document.getElementById('inputManualWrittenText').value = state.writtenText;
     }
 
-    // Función auxiliar para obtener un caracter diferente creíble
     function getTypoForChar(char) {
+      const alternatives = 'abcdefghijklmnopqrstuvwxyzñ';
       const lower = char.toLowerCase();
-      if (typoSubstitutes[lower] && typoSubstitutes[lower].length > 0) {
-        const subs = typoSubstitutes[lower];
-        const chosen = subs[Math.floor(Math.random() * subs.length)];
-        return char === char.toUpperCase() && char !== char.toLowerCase() ? chosen.toUpperCase() : chosen;
-      }
-      // Si es una letra cualquiera
-      if (/[a-zA-Z]/.test(char)) {
-        return char === 'x' ? 'z' : 'x';
-      }
-      // Si es espacio, a veces se escribe pegado o con una letra
-      if (char === ' ') {
-        return ' ';
-      }
-      return '*';
+      let replacement;
+      do {
+        replacement = alternatives[Math.floor(Math.random() * alternatives.length)];
+      } while (replacement === lower);
+      return char === char.toUpperCase() ? replacement.toUpperCase() : replacement;
     }
 
     // Regenerar errores aleatorios
@@ -497,7 +482,7 @@
       state.backspace = document.getElementById('inputBackspace').value;
 
       document.getElementById('displayPPM').innerText = state.ppm;
-      const errorCount = [...state.originalText].reduce((n, c, i) => n + (c !== state.writtenText[i] ? 1 : 0), 0);
+      const errorCount = state.generatedErrorCount;
       document.getElementById('displayErrors').innerText = `${errorCount} (${state.errorPercent}%)`;
       document.getElementById('displayGrade').innerText = state.grade.includes('(') ? state.grade : `${state.grade} (sobre 100)`;
       document.getElementById('displayBackspace').innerText = state.backspace;
@@ -524,14 +509,14 @@
       let totalErrorsFound = 0;
 
       // Algoritmo de comparación carácter a carácter con alineación básica
-      const maxLen = Math.max(orig.length, writ.length);
+      const markedErrors = new Set(state.lastGeneratedIndices);
 
       for (let i = 0; i < writ.length; i++) {
         const charWritten = writ[i];
         const charOriginal = i < orig.length ? orig[i] : null;
 
         // Si difiere del original o sobrepasa el original, es un error
-        const isError = (charWritten !== charOriginal);
+        const isError = markedErrors.has(i);
 
         if (isError) {
           totalErrorsFound++;
